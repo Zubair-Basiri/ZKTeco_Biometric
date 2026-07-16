@@ -1,0 +1,134 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum DeviceStatus {
+  UNKNOWN
+  ONLINE
+  OFFLINE
+  ERROR
+}
+
+enum AttendanceSource {
+  MANUAL
+  DEVICE
+}
+
+enum AttendanceType {
+  CHECK_IN
+  CHECK_OUT
+  BREAK_IN
+  BREAK_OUT
+  UNKNOWN
+}
+
+enum SyncKind {
+  STATUS
+  ATTENDANCE
+  USER_IMPORT
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model Employee {
+  id           String             @id @default(cuid())
+  employeeCode String             @unique
+  firstName    String
+  lastName     String
+  deviceUid    Int?
+  deviceRole   Int?
+  deviceCardNo Int?
+  department   String?
+  designation  String?
+  email        String?            @unique
+  phone        String?
+  biometricUid String?            @unique
+  hireDate     DateTime?
+  isActive     Boolean            @default(true)
+  notes        String?            @db.Text
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  attendances  AttendanceRecord[]
+  attendanceLogs AttendanceLog[]
+
+  @@index([lastName, firstName])
+}
+
+model Device {
+  id              String             @id @default(cuid())
+  name            String
+  ipAddress       String             @unique
+  port            Int                @default(4370)
+  commKey         Int                @default(0)
+  status          DeviceStatus       @default(UNKNOWN)
+  location        String?
+  serialNumber    String?
+  firmwareVersion String?
+  platform        String?
+  lastSeenAt      DateTime?
+  lastSyncAt      DateTime?
+  notes           String?            @db.Text
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  attendances     AttendanceRecord[]
+  syncLogs        SyncLog[]
+
+  @@index([status, updatedAt])
+}
+
+model AttendanceRecord {
+  id               String           @id @default(cuid())
+  employeeId       String?
+  employee         Employee?        @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  deviceId         String?
+  device           Device?          @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  employeeCode     String
+  occurredAt       DateTime
+  type             AttendanceType   @default(UNKNOWN)
+  source           AttendanceSource @default(MANUAL)
+  verificationType String?
+  externalId       String           @unique
+  notes            String?          @db.Text
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([employeeCode, occurredAt])
+  @@index([deviceId, occurredAt])
+}
+
+model SyncLog {
+  id               String     @id @default(cuid())
+  deviceId         String
+  device           Device     @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  kind             SyncKind
+  status           SyncStatus @default(RUNNING)
+  message          String?    @db.Text
+  recordsProcessed Int        @default(0)
+  startedAt        DateTime   @default(now())
+  finishedAt       DateTime?
+
+  @@index([deviceId, startedAt])
+}
+
+model AttendanceLog {
+  id         String   @id @default(cuid())
+  employeeId String
+  timestamp  DateTime
+  date       String
+  status     String
+  syncedToVMS Boolean @default(false)
+
+  employee   Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId])
+  @@index([syncedToVMS])
+}
