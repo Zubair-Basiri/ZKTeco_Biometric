@@ -5,6 +5,6 @@ export {
   PrismaClient,
   SyncKind,
   SyncStatus,
-} from "../../node_modules/.prisma/client/default";
+} from "../../node_modules/.prisma/client";
 
-export type { Device } from "../../node_modules/.prisma/client/default";
+export type { Device } from "../../node_modules/.prisma/client";

@@ -98,11 +98,13 @@ model AttendanceRecord {
   verificationType String?
   externalId       String           @unique
   notes            String?          @db.Text
+  vmsSyncedAt      DateTime?
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
   @@index([employeeCode, occurredAt])
   @@index([deviceId, occurredAt])
+  @@index([vmsSyncedAt])
 }
 
 model SyncLog {

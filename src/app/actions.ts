@@ -6,7 +6,7 @@ import { z } from "zod";
 import { syncDeviceUsers, runDeviceHealthCheck } from "@/lib/device-sync";
 import { getErrorMessage } from "@/lib/helpers";
 import { prisma } from "@/lib/prisma";
-import { syncToVMS } from "@/lib/vms-client";
+import { syncToVMS, type VmsAttendancePayload } from "@/lib/vms-client";
 
 function formValue(formData: FormData, key: string) {
   return String(formData.get(key) ?? "").trim();
@@ -28,14 +28,6 @@ function revalidatePortal() {
   revalidatePath("/api/live");
 }
 
-type AttendancePayload = {
-  empName: string;
-  employeeId: string;   // or ID, depending on your payload
-  date: string;
-  checkInTimes: string[];
-  attendanceCount: number;
-};
-
 type AttendanceLogWithEmployee = {
   id: string;
   employeeId: string;
@@ -44,8 +36,10 @@ type AttendanceLogWithEmployee = {
   syncedToVMS: boolean;
   employee: {
     id: string;
-    name: string;
-    deviceId: string;
+    firstName: string;
+    lastName: string;
+    employeeCode: string;
+    biometricUid: string | null;
   };
 };
 
@@ -117,20 +111,20 @@ export async function syncAttendanceToVMS() {
     where: { syncedToVMS: false },
     include: { employee: true },
     orderBy: { timestamp: "asc" },
-  })) as AttendanceLogWithEmployee[];
+  })) as unknown as AttendanceLogWithEmployee[];
 
   if (unsyncedLogs.length === 0) {
     console.log("📭 No new attendance logs to sync.");
     return;
   }
 
-  const groupedLogs: Record<string, AttendancePayload> = {};
+  const groupedLogs: Record<string, VmsAttendancePayload> = {};
   for (const log of unsyncedLogs) {
     const key = `${log.employeeId}_${log.date}`;
     if (!groupedLogs[key]) {
       groupedLogs[key] = {
-        empName: log.employee.name,
-        employeeId: log.employee.deviceId,
+        empName: `${log.employee.firstName} ${log.employee.lastName}`.trim(),
+        ID: log.employee.biometricUid || log.employee.employeeCode,
         date: log.date,
         checkInTimes: [],
         attendanceCount: 0,

@@ -28,9 +28,9 @@ export async function POST(request: NextRequest) {
       const timestamp = new Date(timestampStr);
       const date = timestamp.toISOString().split("T")[0];
 
-      // Find employee by device ID
+      // Find employee by the biometric user ID stored on the device.
       const employee = await prisma.employee.findUnique({
-        where: { deviceId: userId },
+        where: { biometricUid: userId },
       });
 
       if (!employee) {

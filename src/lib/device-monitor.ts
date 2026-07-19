@@ -1,5 +1,4 @@
 import { AttendanceSource, AttendanceType, DeviceStatus } from "@/lib/prisma-client";
-import ZKLib from "node-zklib";
 import { getDeviceAttendances, getDeviceUsers } from "@/lib/device-client";
 import { upsertDeviceUsersForDirectory, findEmployeeByDeviceCode, type SyncableDeviceUser } from "@/lib/device-directory";
 import { env } from "@/lib/env";
@@ -15,16 +14,8 @@ type DeviceConfig = {
   commKey: number;
 };
 
-type RealTimeLog = {
-  userId?: string | number;
-  attTime?: Date | string;
-};
-
 type MonitorEntry = {
   deviceId: string;
-  client: ZKLib | null;
-  starting: boolean;
-  reconnectTimer: ReturnType<typeof setTimeout> | null;
   lastAttendanceSyncAt: number;
   syncingAttendance: boolean;
 };
@@ -51,17 +42,6 @@ if (!globalForMonitor.zkMonitorState) {
   globalForMonitor.zkMonitorState = monitorState;
 }
 
-function createClient(device: DeviceConfig) {
-  return new ZKLib(
-    device.ipAddress,
-    device.port || env.ZK_DEFAULT_PORT,
-    env.ZK_TIMEOUT_MS,
-    env.ZK_INPORT,
-    device.commKey || 0,
-    "tcp",
-  );
-}
-
 function buildAttendanceExternalId(deviceId: string, code: string, occurredAt: Date) {
   return `DEVICE:${deviceId}:${code}:${occurredAt.toISOString()}`;
 }
@@ -77,34 +57,6 @@ async function setDeviceStatus(deviceId: string, status: DeviceStatus) {
   }).catch(() => {
     // Ignore stale updates when the device row is modified or removed.
   });
-}
-
-function scheduleReconnect(deviceId: string) {
-  const monitor = monitorState.monitors.get(deviceId);
-
-  if (!monitor || monitor.reconnectTimer) {
-    return;
-  }
-
-  monitor.reconnectTimer = setTimeout(() => {
-    const current = monitorState.monitors.get(deviceId);
-    if (current) {
-      current.reconnectTimer = null;
-    }
-    void startMonitor(deviceId);
-  }, 5_000);
-}
-
-async function handleMonitorDisconnect(deviceId: string, status: DeviceStatus) {
-  const monitor = monitorState.monitors.get(deviceId);
-
-  if (monitor) {
-    monitor.client = null;
-    monitor.starting = false;
-  }
-
-  await setDeviceStatus(deviceId, status);
-  scheduleReconnect(deviceId);
 }
 
 async function refreshUsersFromDevice(device: DeviceConfig) {
@@ -167,24 +119,6 @@ async function upsertAttendanceEvent(device: DeviceConfig, rawCode: string, occu
   }
 }
 
-async function handleRealTimePunch(device: DeviceConfig, entry: RealTimeLog) {
-  const rawCode = sanitizeCode(String(entry.userId ?? ""));
-
-  if (!rawCode) {
-    return;
-  }
-
-  const occurredAt = entry.attTime ? new Date(entry.attTime) : new Date();
-
-  if (Number.isNaN(occurredAt.getTime())) {
-    return;
-  }
-
-  await upsertAttendanceEvent(device, rawCode, occurredAt);
-
-  await setDeviceStatus(device.id, DeviceStatus.ONLINE);
-}
-
 async function syncAttendancesFromDevice(deviceId: string) {
   const device = await loadDevice(deviceId);
 
@@ -215,8 +149,9 @@ async function syncAttendancesFromDevice(deviceId: string) {
     }
 
     await setDeviceStatus(device.id, DeviceStatus.ONLINE);
-  } catch {
-    // Keep the realtime listener alive even if attendance backfill fails.
+  } catch (error) {
+    await setDeviceStatus(device.id, DeviceStatus.OFFLINE);
+    console.error(`Attendance read failed for ${device.ipAddress}:`, error);
   }
 }
 
@@ -257,7 +192,7 @@ async function loadDevice(deviceId: string) {
 async function startMonitor(deviceId: string) {
   const existing = monitorState.monitors.get(deviceId);
 
-  if (existing?.starting || existing?.client) {
+  if (existing) {
     return;
   }
 
@@ -267,46 +202,13 @@ async function startMonitor(deviceId: string) {
     return;
   }
 
-  const monitor = existing ?? {
+  const monitor = {
     deviceId,
-    client: null,
-    starting: false,
-    reconnectTimer: null,
     lastAttendanceSyncAt: 0,
     syncingAttendance: false,
   };
 
-  monitor.starting = true;
   monitorState.monitors.set(deviceId, monitor);
-
-  const client = createClient(device);
-  monitor.client = client;
-
-  try {
-    await client.createSocket(
-      () => {
-        void handleMonitorDisconnect(device.id, DeviceStatus.ERROR);
-      },
-      () => {
-        void handleMonitorDisconnect(device.id, DeviceStatus.OFFLINE);
-      },
-    );
-
-    await setDeviceStatus(device.id, DeviceStatus.ONLINE);
-
-    await client.getRealTimeLogs((entry) => {
-      void handleRealTimePunch(device, entry as RealTimeLog);
-    });
-
-    await refreshUsersFromDevice(device);
-    await maybeSyncAttendancesFromDevice(device.id, true);
-  } catch {
-    monitor.client = null;
-    await setDeviceStatus(device.id, DeviceStatus.OFFLINE);
-    scheduleReconnect(device.id);
-  } finally {
-    monitor.starting = false;
-  }
 }
 
 export async function ensureDeviceMonitoring() {
@@ -319,7 +221,7 @@ export async function ensureDeviceMonitoring() {
       });
 
       for (const device of devices) {
-        void startMonitor(device.id);
+        await startMonitor(device.id);
       }
     })().finally(() => {
       monitorState.ensuring = null;
@@ -333,7 +235,6 @@ export async function ensureDeviceAttendanceBackfill() {
   await ensureDeviceMonitoring();
 
   const deviceIds = Array.from(monitorState.monitors.keys());
-
   await Promise.all(
     deviceIds.map((deviceId) => maybeSyncAttendancesFromDevice(deviceId)),
   );

@@ -1,5 +1,6 @@
 import { AttendanceSource, DeviceStatus } from "@/lib/prisma-client";
 import { ensureDeviceAttendanceBackfill, ensureDeviceMonitoring } from "@/lib/device-monitor";
+import { retryPendingVmsSync } from "@/lib/sync-to-vms-on-punch";
 import { prisma } from "@/lib/prisma";
 import { getEmployeeName } from "@/lib/helpers";
 
@@ -149,7 +150,9 @@ export async function getDevicesPageData(): Promise<DevicesPageData> {
       port: device.port,
       commKey: device.commKey,
       location: device.location,
-      status: device.status,
+      status: device.lastSyncAt && Date.now() - device.lastSyncAt.getTime() < 60_000
+        ? DeviceStatus.ONLINE
+        : device.status,
       lastSeenAt: device.lastSeenAt,
       lastSyncAt: device.lastSyncAt,
       notes: device.notes,
@@ -161,6 +164,7 @@ export async function getDevicesPageData(): Promise<DevicesPageData> {
 export async function getLiveDeviceFeed(): Promise<LiveDeviceFeedData> {
   await ensureDeviceMonitoring();
   await ensureDeviceAttendanceBackfill();
+  await retryPendingVmsSync();
 
   const [devices, recentPunches] = await Promise.all([
     prisma.device.findMany({
@@ -211,7 +215,9 @@ export async function getLiveDeviceFeed(): Promise<LiveDeviceFeedData> {
       name: device.name,
       ipAddress: device.ipAddress,
       location: device.location,
-      status: device.status,
+      status: device.lastSyncAt && Date.now() - device.lastSyncAt.getTime() < 60_000
+        ? DeviceStatus.ONLINE
+        : device.status,
       lastSeenAt: device.lastSeenAt,
       lastSyncAt: device.lastSyncAt,
     })),
